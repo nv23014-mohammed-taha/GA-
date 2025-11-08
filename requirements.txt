@@ -1,8 +1,10 @@
 streamlit
 pandas
-numpy
-opencv-python-headless
-tensorflow
 matplotlib
+numpy
+scikit-learn
+tensorflow
+opencv-python
 seaborn
+kagglehub
 mlxtend
