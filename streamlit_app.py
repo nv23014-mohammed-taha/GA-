@@ -197,17 +197,19 @@ elif menu=="Predict Tomorrow":
     st.write(f"Predicted Condition: {cond}")
 
 # 7️⃣ Predict from Image
-elif menu=="Predict from Image":
+elif menu == "Predict from Image":
     st.header("Predict Today's Weather from Image")
     img_file = st.file_uploader("Upload an image", type=["jpg","png","jpeg"])
+    
     if img_file is not None:
-        pred_class, prob = predict_weather_from_image(img_file)
-        if pred_class is None:
-            st.warning("Model not loaded.")
+        if model is None:
+            st.error("⚠️ Model not loaded. Make sure 'vgg19.h5' is in your app folder or correct path is set.")
         else:
-            st.write(f"Predicted Condition: {pred_class}")
-            st.write(f"Confidence: {prob*100:.1f}%")
-            st.image(img_file)
+            pred_class, prob = predict_weather_from_image(img_file)
+            st.success(f"Predicted Condition: {pred_class}")
+            st.info(f"Confidence: {prob*100:.1f}%")
+            st.image(img_file, caption="Uploaded Image", use_column_width=True)
+
 
 # 8️⃣ View All Observations
 elif menu=="View All Observations":
