@@ -1,217 +1,224 @@
-# streamlit_app.py
+#!/usr/bin/env python3
+"""
+Weather Tracker — single-file Python application
 
-import streamlit as st
+Features:
+- Record new observations to a CSV
+- View statistics (avg/min/max temperature, most common condition)
+- Search observations by date
+- View all observations in a formatted table
+Stretch features:
+- ASCII temperature trend
+- Filter by month or season
+- Naive prediction for tomorrow's temperature
+- Compare current year vs previous year averages
+- Identify record-breaking temperatures
+Usage:
+    python weather_tracker.py
+The interactive menu will guide you through options.
+"""
+
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 from collections import Counter
-from tensorflow.keras.models import load_model
-from PIL import Image
+from datetime import datetime, timedelta
 import os
 
-# ------------------------
-# CSV / Weather functions
-# ------------------------
-CSV_FILE = "weather_data.csv"
+DATE_FORMAT = '%m-%d-%Y'  # MM-DD-YYYY as requested
+DEFAULT_CSV = 'weather_data.csv'
 
-def generate_weather_data():
-    """Generate 1-year (2025) dataset with seasonal variation"""
-    conditions = ["Sunny", "Cloudy", "Rainy", "Stormy", "Windy", "Foggy"]
-    start_date = datetime(2025, 1, 1)
-    rows = []
-    for i in range(365):
-        dt = start_date + timedelta(days=i)
-        month = dt.month
-        if month in (12,1,2):
-            temp = np.random.randint(8,20)
-        elif month in (3,4,5):
-            temp = np.random.randint(15,26)
-        elif month in (6,7,8):
-            temp = np.random.randint(25,40)
-        else:
-            temp = np.random.randint(18,30)
-        temp += int(np.random.normal(0,2))
-        cond = np.random.choice(conditions, p=[0.4,0.25,0.2,0.05,0.06,0.04])
-        if cond=="Rainy":
-            humidity = np.random.randint(70,95)
-        elif cond=="Stormy":
-            humidity = np.random.randint(75,98)
-        elif cond=="Foggy":
-            humidity = np.random.randint(80,95)
-        else:
-            humidity = np.random.randint(35,80)
-        wind = np.random.randint(3,30)
-        rows.append({
-            "Date": dt.strftime("%m-%d-%Y"),
-            "Temperature": temp,
-            "Condition": cond,
-            "Humidity": humidity,
-            "WindSpeed": wind
-        })
-    df = pd.DataFrame(rows)
-    df.to_csv(CSV_FILE, index=False)
+def ensure_csv(path):
+    if not os.path.exists(path):
+        cols = ['date','temperature_c','condition','humidity_pct','wind_kmh']
+        pd.DataFrame(columns=cols).to_csv(path, index=False)
+
+def load_data(path=DEFAULT_CSV):
+    ensure_csv(path)
+    df = pd.read_csv(path, parse_dates=['date'], dayfirst=False)
     return df
 
-def load_weather_data():
-    if os.path.exists(CSV_FILE):
-        return pd.read_csv(CSV_FILE)
-    else:
-        return generate_weather_data()
+def save_data(df, path=DEFAULT_CSV):
+    df.to_csv(path, index=False)
 
-def record_observation(date, temp, condition, humidity, wind):
-    df = load_weather_data()
-    new_row = {"Date": date, "Temperature": temp, "Condition": condition,
-               "Humidity": humidity, "WindSpeed": wind}
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    df.to_csv(CSV_FILE, index=False)
+def add_observation(date_str, temperature_c, condition, humidity_pct, wind_kmh, path=DEFAULT_CSV):
+    df = load_data(path)
+    try:
+        date = datetime.strptime(date_str, DATE_FORMAT)
+    except ValueError:
+        raise ValueError(f"Date must be in {DATE_FORMAT}")
+    new = {'date': date, 'temperature_c': float(temperature_c), 'condition': condition,
+           'humidity_pct': float(humidity_pct), 'wind_kmh': float(wind_kmh)}
+    df = pd.concat([df, pd.DataFrame([new])], ignore_index=True)
+    save_data(df, path)
     return df
 
-def weather_statistics(df):
-    avg_temp = df["Temperature"].mean()
-    min_temp = df["Temperature"].min()
-    max_temp = df["Temperature"].max()
-    most_common_condition = Counter(df["Condition"]).most_common(1)[0][0]
-    return avg_temp, min_temp, max_temp, most_common_condition
+def view_stats(path=DEFAULT_CSV):
+    df = load_data(path)
+    if df.empty:
+        return None
+    temps = df['temperature_c'].astype(float)
+    return {
+        'avg_temperature_c': temps.mean(),
+        'min_temperature_c': temps.min(),
+        'max_temperature_c': temps.max(),
+        'most_common_condition': Counter(df['condition']).most_common(1)[0][0] if not df['condition'].empty else None
+    }
 
-def search_by_date(df, date):
-    return df[df["Date"]==date]
+def search_by_date(date_str, path=DEFAULT_CSV):
+    df = load_data(path)
+    try:
+        date = datetime.strptime(date_str, DATE_FORMAT)
+    except ValueError:
+        raise ValueError(f"Date must be in {DATE_FORMAT}")
+    results = df[df['date'] == pd.Timestamp(date)]
+    return results
 
-def filter_by_month(df, month):
-    return df[pd.to_datetime(df["Date"]).dt.month==month]
+def view_all(path=DEFAULT_CSV):
+    return load_data(path).sort_values('date')
 
-def filter_by_season(df, season):
-    month_map = {"Winter":[12,1,2], "Spring":[3,4,5], "Summer":[6,7,8], "Autumn":[9,10,11]}
-    months = month_map.get(season, [])
-    return df[pd.to_datetime(df["Date"]).dt.month.isin(months)]
+# ---------- Stretch features ----------
 
-def record_temperatures(df):
-    return df.loc[df["Temperature"].idxmax()], df.loc[df["Temperature"].idxmin()]
+def ascii_temp_trend(days=14, path=DEFAULT_CSV):
+    """
+    Simple text-based temperature trend (recent `days` entries).
+    Produces short sparkline-like lines: 'MM-DD |   █ 27.3°C'
+    """
+    df = load_data(path)
+    if df.empty:
+        return "No data to display."
+    cutoff = pd.Timestamp(datetime.now() - timedelta(days=days))
+    recent = df[df['date'] >= cutoff].sort_values('date')
+    if recent.empty:
+        recent = df.sort_values('date').tail(days)
+    temps = recent['temperature_c'].astype(float).tolist()
+    if not temps:
+        return "No temps available."
+    min_t, max_t = min(temps), max(temps)
+    width = 30
+    lines = []
+    for d,t in zip(recent['date'].dt.strftime('%m-%d'), temps):
+        pos = 0 if max_t==min_t else int((t - min_t) / (max_t - min_t) * (width-1))
+        bar = ' ' * pos + '█'
+        lines.append(f"{d} |{bar} {t:.1f}°C")
+    return "\n".join(lines)
 
-def predict_tomorrow(df):
-    df_dates = pd.to_datetime(df["Date"])
-    last_week = df[df_dates >= df_dates.max() - pd.Timedelta(days=7)]
-    avg_temp = last_week["Temperature"].mean()
-    most_common_condition = Counter(last_week["Condition"]).most_common(1)[0][0]
-    return round(avg_temp,1), most_common_condition
+def filter_by_month(month, path=DEFAULT_CSV):
+    df = load_data(path)
+    return df[df['date'].dt.month == int(month)]
 
-# ------------------------
-# Image-based prediction
-# ------------------------
-MODEL_PATH = "vgg19.h5"
-CLASSES = ["cloudy","foggy","rainy","shine","sunrise"]
+def filter_by_season(season, path=DEFAULT_CSV):
+    season_map = {
+        'winter': [12,1,2],
+        'spring': [3,4,5],
+        'summer': [6,7,8],
+        'autumn': [9,10,11],
+        'fall': [9,10,11]
+    }
+    months = season_map.get(season.lower())
+    if not months:
+        raise ValueError('Unknown season. Use winter/spring/summer/autumn.')
+    df = load_data(path)
+    return df[df['date'].dt.month.isin(months)]
 
-try:
-    model = load_model(MODEL_PATH)
-except Exception:
-    model = None
+def predict_tomorrow(path=DEFAULT_CSV):
+    """
+    Naive predictor:
+      1) If historical records exist for the same calendar day (any year), use their mean.
+      2) Otherwise use the mean of the most recent 7 records.
+      3) Otherwise global mean.
+    """
+    df = load_data(path)
+    if df.empty:
+        return None
+    today = pd.Timestamp(datetime.now().date())
+    same_day = df[df['date'].dt.day == today.day]
+    if not same_day.empty:
+        return same_day['temperature_c'].astype(float).mean()
+    recent = df.sort_values('date').tail(7)
+    if not recent.empty:
+        return recent['temperature_c'].astype(float).mean()
+    return df['temperature_c'].astype(float).mean()
 
-def predict_weather_from_image(img_file):
-    if model is None:
-        return None, None
-    img = Image.open(img_file).resize((150,150))
-    img = np.array(img)/255.0
-    img = np.expand_dims(img, axis=0)
-    pred = model.predict(img)
-    class_idx = np.argmax(pred)
-    return CLASSES[class_idx], float(pred[0][class_idx])
+def compare_years(year, path=DEFAULT_CSV):
+    df = load_data(path)
+    df['year'] = df['date'].dt.year
+    this = df[df['year'] == int(year)]
+    prev = df[df['year'] == int(year)-1]
+    return {
+        'year': int(year),
+        'avg_this_year': this['temperature_c'].astype(float).mean() if not this.empty else None,
+        'avg_prev_year': prev['temperature_c'].astype(float).mean() if not prev.empty else None
+    }
 
-# ------------------------
-# Streamlit UI
-# ------------------------
-st.title("🌤 Weather Tracker App")
-df = load_weather_data()
+def record_breakers(path=DEFAULT_CSV):
+    df = load_data(path)
+    if df.empty:
+        return {'highest': None, 'lowest': None}
+    highest = df.loc[df['temperature_c'].astype(float).idxmax()].to_dict()
+    lowest = df.loc[df['temperature_c'].astype(float).idxmin()].to_dict()
+    return {'highest': highest, 'lowest': lowest}
 
-menu = st.sidebar.selectbox("Menu", [
-    "Record Observation",
-    "View Statistics",
-    "Search by Date",
-    "Filter by Month/Season",
-    "Record-breaking Temps",
-    "Predict Tomorrow",
-    "Predict from Image",
-    "View All Observations"
-])
-
-# 1️⃣ Record Observation
-if menu=="Record Observation":
-    st.header("Record a New Weather Observation")
-    date_input = st.date_input("Date")
-    date_str = date_input.strftime("%m-%d-%Y")
-    temp = st.number_input("Temperature (°C)", min_value=-50, max_value=60)
-    condition = st.selectbox("Condition", ["Sunny","Cloudy","Rainy","Stormy","Windy","Foggy"])
-    humidity = st.number_input("Humidity (%)", min_value=0, max_value=100)
-    wind = st.number_input("Wind Speed (km/h)", min_value=0, max_value=200)
-    if st.button("Record Observation"):
-        df = record_observation(date_str, temp, condition, humidity, wind)
-        st.success(f"Observation for {date_str} recorded!")
-
-# 2️⃣ View Statistics
-elif menu=="View Statistics":
-    st.header("Weather Statistics")
-    avg_temp, min_temp, max_temp, most_common = weather_statistics(df)
-    st.write(f"Average Temperature: {avg_temp:.1f}°C")
-    st.write(f"Minimum Temperature: {min_temp}°C")
-    st.write(f"Maximum Temperature: {max_temp}°C")
-    st.write(f"Most Common Condition: {most_common}")
-
-# 3️⃣ Search by Date
-elif menu=="Search by Date":
-    st.header("Search Observations by Date")
-    date_input = st.date_input("Select Date")
-    date_str = date_input.strftime("%m-%d-%Y")
-    res = search_by_date(df, date_str)
-    if not res.empty:
-        st.dataframe(res)
-    else:
-        st.write("No observations found.")
-
-# 4️⃣ Filter by Month/Season
-elif menu=="Filter by Month/Season":
-    st.header("Filter Observations")
-    filter_type = st.radio("Filter by:", ["Month","Season"])
-    if filter_type=="Month":
-        month = st.number_input("Enter month (1-12)",1,12)
-        res = filter_by_month(df, month)
-    else:
-        season = st.selectbox("Select season", ["Winter","Spring","Summer","Autumn"])
-        res = filter_by_season(df, season)
-    if not res.empty:
-        st.dataframe(res)
-    else:
-        st.write("No observations found.")
-
-# 5️⃣ Record-breaking Temperatures
-elif menu=="Record-breaking Temps":
-    st.header("Record-breaking Temperatures")
-    max_row, min_row = record_temperatures(df)
-    st.write("🔥 Highest Temperature:")
-    st.dataframe(max_row.to_frame().T)
-    st.write("❄️ Lowest Temperature:")
-    st.dataframe(min_row.to_frame().T)
-
-# 6️⃣ Predict Tomorrow
-elif menu=="Predict Tomorrow":
-    st.header("Predict Tomorrow's Weather")
-    temp, cond = predict_tomorrow(df)
-    st.write(f"Predicted Temperature: {temp}°C")
-    st.write(f"Predicted Condition: {cond}")
-
-# 7️⃣ Predict from Image
-elif menu == "Predict from Image":
-    st.header("Predict Today's Weather from Image")
-    img_file = st.file_uploader("Upload an image", type=["jpg","png","jpeg"])
-    
-    if img_file is not None:
-        if model is None:
-            st.error("⚠️ Model not loaded. Make sure 'vgg19.h5' is in your app folder or correct path is set.")
+# ---------- Simple CLI (non-GUI) ----------
+def menu_loop(path=DEFAULT_CSV):
+    ensure_csv(path)
+    while True:
+        print("\nWeather Tracker")
+        print("1. Record a new weather observation")
+        print("2. View weather statistics")
+        print("3. Search observations by date")
+        print("4. View all observations")
+        print("5. ASCII temperature trend (14 days)")
+        print("6. Filter by month")
+        print("7. Predict tomorrow (naive)")
+        print("8. Show record breakers")
+        print("9. Exit")
+        choice = input("Choose an option (1-9): ").strip()
+        if choice == '1':
+            d = input("Date (MM-DD-YYYY): ").strip()
+            temp = input("Temperature (°C): ").strip()
+            cond = input("Condition (Sunny/Cloudy/Rainy/etc.): ").strip()
+            hum = input("Humidity %: ").strip()
+            wind = input("Wind km/h: ").strip()
+            try:
+                add_observation(d, temp, cond, hum, wind, path=path)
+                print("Observation recorded.")
+            except Exception as e:
+                print("Error:", e)
+        elif choice == '2':
+            s = view_stats(path=path)
+            if not s:
+                print("No data.")
+            else:
+                print(f"Average: {s['avg_temperature_c']:.2f}°C, Min: {s['min_temperature_c']:.2f}°C, Max: {s['max_temperature_c']:.2f}°C, Most common: {s['most_common_condition']}")
+        elif choice == '3':
+            d = input("Date to search (MM-DD-YYYY): ").strip()
+            try:
+                res = search_by_date(d, path=path)
+                print(res.to_string(index=False) if not res.empty else "No observations for that date.")
+            except Exception as e:
+                print("Error:", e)
+        elif choice == '4':
+            print(view_all(path=path).to_string(index=False))
+        elif choice == '5':
+            print(ascii_temp_trend(days=14, path=path))
+        elif choice == '6':
+            m = input("Month number (1-12) or season name (e.g. winter): ").strip()
+            if m.isdigit():
+                print(filter_by_month(int(m), path=path).to_string(index=False))
+            else:
+                try:
+                    print(filter_by_season(m, path=path).to_string(index=False))
+                except Exception as e:
+                    print("Error:", e)
+        elif choice == '7':
+            pred = predict_tomorrow(path=path)
+            print("Predicted temperature for tomorrow (°C):", f"{pred:.1f}" if pred is not None else "No data")
+        elif choice == '8':
+            print(record_breakers(path=path))
+        elif choice == '9':
+            print("Goodbye.")
+            break
         else:
-            pred_class, prob = predict_weather_from_image(img_file)
-            st.success(f"Predicted Condition: {pred_class}")
-            st.info(f"Confidence: {prob*100:.1f}%")
-            st.image(img_file, caption="Uploaded Image", use_column_width=True)
+            print("Invalid choice.")
 
-
-# 8️⃣ View All Observations
-elif menu=="View All Observations":
-    st.header("All Recorded Weather Observations")
-    st.dataframe(df)
+if __name__ == '__main__':
+    menu_loop()
